@@ -7,6 +7,33 @@ const WS早期数据最大字节 = 8 * 1024, WS早期数据最大头长度 = Mat
 const 上行合包目标字节 = 20 * 1024, 上行队列最大字节 = 16 * 1024 * 1024, 上行队列最大条目 = 4096;
 const 下行Grain包字节 = 32 * 1024, 下行Grain尾部阈值 = 512, 下行Grain低水位字节 = Math.max(4096, 下行Grain尾部阈值 * 12), 下行Grain最大等待轮次 = 4;
 let TCP并发拨号数 = 2, 反代并发拨号数 = 1, 预加载竞速拨号 = false;
+// 预加载竞速会为每个目标查询 A/AAAA。把成功结果短暂缓存并合并并发查询，
+// 避免每条新连接都额外等待两次 DoH，同时保留 IP 竞速带来的连接收益。
+const 预加载DNS缓存 = new Map();
+const 预加载DNS缓存TTL毫秒 = 60 * 1000;
+const 预加载DNS缓存最大条目 = 256;
+async function 缓存预加载DNS查询(address, recordType) {
+	const key = `${recordType}:${String(address).toLowerCase()}`;
+	const now = Date.now();
+	const cached = 预加载DNS缓存.get(key);
+	if (cached && cached.expiresAt > now) return cached.promise;
+	const promise = DoH查询(address, recordType).then(records => {
+		const current = 预加载DNS缓存.get(key);
+		if (current?.promise === promise) current.expiresAt = Date.now() + 预加载DNS缓存TTL毫秒;
+		return records;
+	}).catch(error => {
+		const current = 预加载DNS缓存.get(key);
+		if (current?.promise === promise) 预加载DNS缓存.delete(key);
+		throw error;
+	});
+// 查询中的结果只短暂占位，避免单个卡住的 DoH 请求阻塞后续连接太久。
+	if (预加载DNS缓存.size >= 预加载DNS缓存最大条目) {
+		const oldestKey = 预加载DNS缓存.keys().next().value;
+		if (oldestKey && oldestKey !== key) 预加载DNS缓存.delete(oldestKey);
+	}
+	预加载DNS缓存.set(key, { promise, expiresAt: now + 5000 });
+	return promise;
+}
 ///////////////////////////////////////////////////////查杀特征码///////////////////////////////////////////////
 const 特征码字典 = [
 	(Proxy.name + "IP").toUpperCase(),
@@ -2177,8 +2204,8 @@ async function forwardataTCP(host, portNum, rawData, ws, respHeader, remoteConnW
 		if (!预加载竞速拨号 || isIPHostname(address)) return null;
 		log(`[TCP直连] 预加载竞速拨号开启，开始并发查询 ${address} 的 A/AAAA 记录`);
 		const [aRecords, aaaaRecords] = await Promise.all([
-			DoH查询(address, 'A'),
-			DoH查询(address, 'AAAA')
+			缓存预加载DNS查询(address, 'A'),
+			缓存预加载DNS查询(address, 'AAAA')
 		]);
 		const ipv4List = [...new Set(aRecords.flatMap(r => {
 			const data = r.data;
