@@ -6,7 +6,7 @@ const Pages静态页面 = 'https://edt-pages.github.io';
 const WS早期数据最大字节 = 8 * 1024, WS早期数据最大头长度 = Math.ceil(WS早期数据最大字节 * 4 / 3) + 4;
 const 上行合包目标字节 = 20 * 1024, 上行队列最大字节 = 16 * 1024 * 1024, 上行队列最大条目 = 4096;
 const 下行Grain包字节 = 32 * 1024, 下行Grain尾部阈值 = 512, 下行Grain低水位字节 = Math.max(4096, 下行Grain尾部阈值 * 12), 下行Grain最大等待轮次 = 4;
-let TCP并发拨号数 = 2, 反代并发拨号数 = 1, 预加载竞速拨号 = false;
+let TCP并发拨号数 = 2, 反代并发拨号数 = 2, 预加载竞速拨号 = true;
 // 预加载竞速会为每个目标查询 A/AAAA。把成功结果短暂缓存并合并并发查询，
 // 避免每条新连接都额外等待两次 DoH，同时保留 IP 竞速带来的连接收益。
 const 预加载DNS缓存 = new Map();
@@ -63,10 +63,12 @@ export default {
 		const host = hosts[0];
 		const 访问路径 = url.pathname.slice(1).toLowerCase();
 		调试日志打印 = ['1', 'true'].includes(env.DEBUG) || 调试日志打印;
-		预加载竞速拨号 = ['1', 'true'].includes(env.PRELOAD_RACE_DIAL) || 预加载竞速拨号;
-		反代并发拨号数 = Math.max(1, Number(env.PROXY_CONCURRENT_DIAL) || 反代并发拨号数);
-		TCP并发拨号数 = Math.max(1, Number(env.TCP_CONCURRENT_DIAL) || TCP并发拨号数);
-		if (!env.TCP_CONCURRENT_DIAL && TCP并发拨号数 !== 1 && 识别运营商(request) === 'cmcc') TCP并发拨号数 = 1;
+		预加载竞速拨号 = env.PRELOAD_RACE_DIAL === undefined
+			? true
+			: ['1', 'true'].includes(String(env.PRELOAD_RACE_DIAL).toLowerCase());
+		反代并发拨号数 = Math.max(1, Number(env.PROXY_CONCURRENT_DIAL) || 2);
+		TCP并发拨号数 = Math.max(1, Number(env.TCP_CONCURRENT_DIAL) || 2);
+		if (['1', 'true'].includes(String(env.AUTO_TUNE_DIAL).toLowerCase()) && !env.TCP_CONCURRENT_DIAL && TCP并发拨号数 !== 1 && 识别运营商(request) === 'cmcc') TCP并发拨号数 = 1;
 		let 默认反代IP = (`${request.cf.colo}.${特征码字典[0]}.${特征码字典[1]}SsSs.nEt`).toLowerCase(), 默认反代兜底 = true;
 		if (env.PROXYIP) {
 			const proxyIPs = await 整理成数组(env.PROXYIP);
